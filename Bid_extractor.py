@@ -11,7 +11,6 @@ st.set_page_config(page_title="Bid Extractor", layout="centered")
 st.title("Bid Extractor")
 st.markdown("Upload PDF/Image")
 
-
 pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 
 def get_zoho_access_token():
@@ -40,78 +39,120 @@ def extract_text_from_pdf_bytes(pdf_bytes):
 def extract_text_from_image(image):
     return pytesseract.image_to_string(image, config='--psm 6')
 
-def parse_bid_table(full_text):
+def parse_bid_info(full_text):
+    # Remove | from table
+    full_text = re.sub(r'\s*\|\s*', ' ', full_text)
     lines = [line.strip() for line in full_text.splitlines() if line.strip()]
-    
-    rfx_number = "UNKNOWN"
+
+    # Bid No
+    bid_no = "UNKNOWN"
     for line in lines:
-        if re.search(r'RFx\s*number|RFx\s*No', line, re.IGNORECASE):
+        if "RFx number" in line:
             match = re.search(r'\d{10,}', line)
             if match:
-                rfx_number = match.group(0)
+                bid_no = match.group(0)
                 break
 
+    # Customer Name
+    customer_name = "Unknown"
+    company_found = False
+    for line in lines:
+        if "Company" in line:
+            company_found = True
+            continue
+        if company_found and line and not line.startswith(("C-", "Information", "Description", "RFx")):
+            # The line after "Company" is usually the customer name (ASEEM ELECTRONICS)
+            customer_name = line.upper()  # Often in caps
+            break
+
+    # Closing Date
+    closing_date = "Unknown"
+    for line in lines:
+        if "Submission period:" in line:
+            match = re.search(r'-\s*(\d{2}\.\d{2}\.\d{4} \d{2}:\d{2}:\d{2})', line)
+            if match:
+                closing_date = match.group(1)
+            break
+
+    # Bid Email
+    bid_email = "Unknown"
+    for line in lines:
+        match = re.search(r'[\w\.-]+@bel\.co\.in', line)
+        if match:
+            bid_email = match.group(0)
+            break
+
+    # Find table start
     start_idx = 0
     for i, line in enumerate(lines):
         if "Bid Details" in line:
-            start_idx = i + 1  
+            # Header usually next
+            if i + 1 < len(lines) and "Item" in lines[i+1]:
+                start_idx = i + 2
             break
 
     rows = []
-    current = None
+    current_item = None
+    vendor_lines = []
 
     for line in lines[start_idx:]:
-        if any(h in line.upper() for h in ["ITEM", "MATERIAL NO.", "DESCRIPTION", "QTY/UNIT"]):
+        # Skip unwanted
+        if any(kw in line for kw in ["MSME", "@gmail.com", "@aseemelectronics.com"]):
             continue
 
-        item_match = re.match(r'^(\d{1,4})\s+', line)
+        # Item line
+        item_match = re.match(r'^(\d{1,4})\s+(\d{10,})\s+(.*?)\s+(\d+(?:\.\d+)? \s*[A-Z]+)$', line)
         if item_match:
-            if current:
-                rows.append(current)
+            # Save previous
+            if current_item:
+                for v_line in vendor_lines:
+                    if '-' in v_line:
+                        parts = v_line.split('-', 1)
+                        man = parts[0].strip()
+                        mpn = parts[1].strip() if len(parts) > 1 else ""
+                        rows.append({
+                            "Item": current_item["Item"],
+                            "Customer_Part_No": current_item["Customer_Part_No"],
+                            "Item_Description": current_item["Item_Description"],
+                            "Quantity": current_item["Quantity"],
+                            "Manufacturer": man,
+                            "MPN": mpn
+                        })
+                if not vendor_lines:
+                    rows.append(current_item)
 
-            item_no = item_match.group(1)
-            rest = line[item_match.end():].strip()
-
-            qty_match = re.search(r'(\d+\s+NO)$', rest, re.IGNORECASE)
-            if qty_match:
-                qty = qty_match.group(1).upper()
-                rest_no_qty = rest[:qty_match.start()].strip()
-            else:
-                qty = ""
-                rest_no_qty = rest
-
-            mat_match = re.match(r'(\d{10,})\s+(.*)', rest_no_qty)
-            if mat_match:
-                material = mat_match.group(1)
-                description = mat_match.group(2)
-            else:
-                material = ""
-                description = rest_no_qty
-
-            current = {
-                "RFx_Number": rfx_number,
-                "Item_No": item_no,
-                "Material_No": material,
-                "Description": description,
-                "Qty_Unit": qty
+            current_item = {
+                "Item": item_match.group(1),
+                "Customer_Part_No": item_match.group(2),
+                "Item_Description": item_match.group(3).strip(),
+                "Quantity": item_match.group(4),
+                "Manufacturer": "",
+                "MPN": ""
             }
+            vendor_lines = []
         else:
-            if current and line.strip():
-                cleaned = line.strip()
+            if current_item:
+                vendor_lines.append(line)
 
-                if re.search(r'[A-Z0-9\-& ,.]+', cleaned) and any(kw in cleaned.upper() for kw in ["SOURIAU", "RADIALL", "& CIE", "PRIVATE LIMITED", "-847"]):
-                    if current["Material_No"]:
-                        current["Material_No"] += " / " + cleaned
-                    else:
-                        current["Material_No"] = cleaned
-                else:
-                    
-                    current["Description"] += " " + cleaned
+    # Save last
+    if current_item:
+        for v_line in vendor_lines:
+            if '-' in v_line:
+                parts = v_line.split('-', 1)
+                man = parts[0].strip()
+                mpn = parts[1].strip() if len(parts) > 1 else ""
+                rows.append({
+                    "Item": current_item["Item"],
+                    "Customer_Part_No": current_item["Customer_Part_No"],
+                    "Item_Description": current_item["Item_Description"],
+                    "Quantity": current_item["Quantity"],
+                    "Manufacturer": man,
+                    "MPN": mpn
+                })
+        if not vendor_lines:
+            rows.append(current_item)
 
-    if current:
-        rows.append(current)
-
-    return rows
+    return bid_no, customer_name, closing_date, bid_email, rows
 
 uploaded_file = st.file_uploader("Upload Bid(PDF or Image)", type=["pdf", "png", "jpg", "jpeg"])
 
@@ -128,20 +169,18 @@ if uploaded_file:
     with st.expander("Extracted Raw Text (OCR)"):
         st.text_area("Raw Text", text, height=300)
 
-    rows = parse_bid_table(text)
+    bid_no, customer_name, closing_date, bid_email, rows = parse_bid_info(text)
 
     if rows:
         df = pd.DataFrame(rows)
-        rfx = rows[0]["RFx_Number"]
-        st.success(f"Extracted {len(rows)} items | RFx number: {rfx}")
-        st.dataframe(df[['Item_No', 'Material_No', 'Description', 'Qty_Unit']], use_container_width=True)
+        st.success(f"Extracted {len(rows)} items | Bid No: {bid_no}")
+        st.dataframe(df[['Item','Customer_Part_No', 'Item_Description', 'Manufacturer', 'MPN', 'Quantity']], use_container_width=True)
 
         csv = df.to_csv(index=False).encode('utf-8')
-        st.download_button("Download Extracted Data as CSV", csv, f"BEL_RFx_{rfx}.csv", "text/csv")
-
+        st.download_button("Download Extracted Data as CSV", csv, f"Bid_{bid_no}.csv", "text/csv")
 
         st.markdown("### Upload to Zoho CRM")
-        st.info("Creates 1 record in **Bid Details** with all line items in the **Bid Items** subform.")
+        st.info("Creates 1 record")
 
         if st.button("Upload to Zoho CRM", type="primary"):
             with st.spinner("Uploading to Zoho CRM..."):
@@ -154,17 +193,22 @@ if uploaded_file:
 
                     subform_items = [
                         {
-                            "Item": row["Item_No"],
-                            "Material_No": row["Material_No"],
-                            "Description": row["Description"],
-                            "Qty_Unit": row["Qty_Unit"]
+                            "Item":row["Item"],
+                            "Material_No": row["Customer_Part_No"],
+                            "Description": row["Item_Description"],
+                            "manufacturer": row["Manufacturer"],
+                            "MPN": row["MPN"],
+                            "Qty_Unit": row["Quantity"]
                         }
                         for row in rows
                     ]
 
                     payload = {
                         "data": [{
-                            "Name": rfx,                       
+                            "Name": bid_no,                       
+                            "Customer_Name": customer_name,
+                            "Closing_Date": closing_date,
+                            "Bid_email": bid_email,
                             "Bid_Items": subform_items
                         }]
                     }
@@ -176,11 +220,10 @@ if uploaded_file:
                     if response.status_code == 201:
                         record_id = response.json()["data"][0]["details"]["id"]
                         st.success("Record created in Zoho CRM")
-                        st.balloons()
-                        st.write(f"**RFx number**: {rfx}")
+                        st.write(f"**Bid No**: {bid_no}")
                         st.write(f"**Record ID**: {record_id}")
                         st.write(f"**Items added**: {len(rows)} in Bid Items subform")
-                        st.info("Check Zoho CRM → Bid Details to see the new record!")
+                        st.info("Check Zoho CRM → Bid Details Updated!")
                     else:
                         st.error("Upload failed")
                         st.code(response.text)
@@ -192,4 +235,4 @@ if uploaded_file:
         st.warning("No items detected. Try a higher quality scan/PDF.")
 
 else:
-    st.info("Upload bid document to get started.")
+    st.info("Upload bid document")
