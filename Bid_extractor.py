@@ -9,7 +9,6 @@ from PyPDF2 import PdfReader
 
 st.set_page_config(page_title="Bid Extractor", layout="centered")
 st.title("Bid Extractor")
-st.markdown("Upload PDF/Image")
 
 pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 
@@ -40,7 +39,7 @@ def extract_text_from_image(image):
     return pytesseract.image_to_string(image, config='--psm 6')
 
 def parse_bid_info(full_text):
-    # Remove | from table
+    # Remove 
     full_text = re.sub(r'\s*\|\s*', ' ', full_text)
     lines = [line.strip() for line in full_text.splitlines() if line.strip()]
 
@@ -166,8 +165,8 @@ if uploaded_file:
         st.image(image, caption="Uploaded Image", use_column_width=True)
         text = extract_text_from_image(image)
 
-    with st.expander("Extracted Raw Text (OCR)"):
-        st.text_area("Raw Text", text, height=300)
+    '''with st.expander("Extracted Raw Text (OCR)"):
+        st.text_area("Raw Text", text, height=300)'''
 
     bid_no, customer_name, closing_date, bid_email, rows = parse_bid_info(text)
 
@@ -176,11 +175,11 @@ if uploaded_file:
         st.success(f"Extracted {len(rows)} items | Bid No: {bid_no}")
         st.dataframe(df[['Item','Customer_Part_No', 'Item_Description', 'Manufacturer', 'MPN', 'Quantity']], use_container_width=True)
 
-        csv = df.to_csv(index=False).encode('utf-8')
-        st.download_button("Download Extracted Data as CSV", csv, f"Bid_{bid_no}.csv", "text/csv")
+        '''csv = df.to_csv(index=False).encode('utf-8')
+        st.download_button("Download Extracted Data as CSV", csv, f"Bid_{bid_no}.csv", "text/csv")'''
 
         st.markdown("### Upload to Zoho CRM")
-        st.info("Creates 1 record")
+        '''st.info("Creates 1 record")'''
 
         if st.button("Upload to Zoho CRM", type="primary"):
             with st.spinner("Uploading to Zoho CRM..."):
@@ -236,3 +235,4 @@ if uploaded_file:
 
 else:
     st.info("Upload bid document")
+
